@@ -28,7 +28,7 @@
 import init.qcom.usb.rc
 
 on early-init
-    write /sys/block/mmcblk0/queue/scheduler noop
+    write /sys/block/mmcblk0/queue/scheduler cfq
 
     mkdir /firmware 0771 system system
     symlink /data/tombstones /tombstones
@@ -70,9 +70,6 @@ on init
 on early-boot
     # set RLIMIT_MEMLOCK to 64MB
     setrlimit 8 67108864 67108864
-
-    setprop persist.sys.ssr.restart_level 3
-    write /sys/module/subsystem_restart/parameters/enable_ramdumps 0
 
     chown system graphics /sys/class/graphics/fb1/hpd
     chown system graphics /sys/class/graphics/fb1/vendor_name
@@ -194,14 +191,11 @@ on boot
 
     # Flash storage isn't a good entropy source, and only causes locking
     # overhead in the kernel. Turn it off.
-    write /sys/block/mmcblk0/queue/add_random 0
+    write /sys/block/mmcblk0/queue/add_random 1
 
     write /sys/devices/i2c-3/3-0024/cyttsp_update_fw 1
     write /sys/devices/i2c-3/3-005b/update_fw 1
     start qcamerasvr
-
-    # enable pulsing led on boot
-    write /sys/class/sec/led/led_pattern 6
 
 on fs
     mount_all fstab.qcom
@@ -222,12 +216,12 @@ on fs
     restorecon_recursive /efs
 
     wait /dev/block/platform/msm_sdcc.1/by-name/modem
-    mount vfat /dev/block/platform/msm_sdcc.1/by-name/modem /firmware ro shortname=lower dmask=177 fmask=177
+    mount vfat /dev/block/platform/msm_sdcc.1/by-name/modem /firmware rw shortname=lower dmask=177 fmask=177
 
     chown system radio /dev/block/platform/msm_sdcc.1/by-name
     chmod 0775 /dev/block/platform/msm_sdcc.1/by-name
 
-    setprop ro.crypto.fuse_sdcard true
+    setprop ro.crypto.fuse_sdcard false
 
 on post-fs
     chown system system /sys/block/mmcblk0/queue/scheduler
@@ -236,12 +230,8 @@ on post-fs
     chmod 0664 /sys/block/mmcblk1/queue/scheduler
 
     # Increase max readahead size to 512 KB
-    write /sys/block/mmcblk0/queue/read_ahead_kb 512
-    write /sys/block/mmcblk1/queue/read_ahead_kb 512
-
-    # for controlling write performance boosting
-    chown system radio /sys/block/mmcblk0/bkops_en
-    chmod 0664 /sys/block/mmcblk0/bkops_en
+    write /sys/block/mmcblk0/queue/read_ahead_kb 0
+    write /sys/block/mmcblk1/queue/read_ahead_kb 0
 
 on post-fs-data
     mkdir /data/tombstones 0771 system system
@@ -535,10 +525,8 @@ on post-fs-data
     setprop net.tcp.buffersize.hsupa   4092,87380,704512,4096,16384,262144
     setprop net.tcp.buffersize.hsdpa   4092,87380,704512,4096,16384,110208
     setprop net.tcp.buffersize.hspap   4092,87380,704512,4096,16384,262144
-    setprop net.tcp.buffersize.edge    4093,26280,35040,4096,16384,35040
-    setprop net.tcp.buffersize.gprs    4096,30000,30000,4096,8760,11680
-    setprop net.tcp.buffersize.evdo    4094,87380,262144,4096,16384,262144
-
+    
+    
     setprop vold.post_fs_data_done 1
 
 on property:init.svc.surfaceflinger=stopped
@@ -553,7 +541,7 @@ on property:init.svc.p2p_supplicant=stopped
 
 on property:bluetooth.isEnabled=true
     start btwlancoex
-    write /sys/class/bluetooth/hci0/idle_timeout 7000
+    write /sys/class/bluetooth/hci0/idle_timeout 0
 
 on property:vold.decrypt=trigger_restart_framework
     start config_bluetooth
@@ -566,22 +554,19 @@ service irsc_util /system/bin/logwrapper /system/bin/irsc_util "/etc/sec_config"
 service rmt_storage /system/bin/rmt_storage
     class core
     user root
-    disabled
 
 on property:ro.boot.emmc=true
     start rmt_storage
 
 service bridgemgrd /system/bin/bridgemgrd
-    class late_start
+    class main
     user radio
     group radio qcom_diag
-    disabled
 
 service port-bridge /system/bin/port-bridge /dev/smd0 /dev/ttyGS0
-    class late_start
+    class main
     user system
     group system inet
-    disabled
 
 # QMUX must be in multiple groups to support external process connections
 # For EncryptionMode - remove disabled, Modify class main
@@ -603,95 +588,80 @@ on property:ro.data.large_tcp_window_size=true
     write /proc/sys/net/ipv4/tcp_adv_win_scale  2
 
 service btwlancoex /system/bin/sh /system/etc/init.qcom.coex.sh
-    class late_start
+    class main
     user bluetooth
     group bluetooth net_bt_admin inet net_admin net_raw
-    disabled
     oneshot
 
 # New supplicant service config to support both BCM4334 / WCN3660
-service wpa_supplicant /system/bin/wpa_supplicant \
-    -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf \
-    -I/system/etc/wifi/wpa_supplicant_overlay.conf \
-    -O/data/misc/wifi/sockets \
+service wpa_supplicant /system/bin/wpa_supplicant
+    -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf
+    -I/system/etc/wifi/wpa_supplicant_overlay.conf
+    -O/data/misc/wifi/sockets
     -e/data/misc/wifi/entropy.bin -g@android:wpa_wlan0
     #   we will start as root and wpa_supplicant will switch to user wifi
     #   after setting up the capabilities required for WEXT
-    #   user wifi
-    #   group wifi inet keystore
+    user wifi
+    group wifi inet keystore
     class main
     socket wpa_wlan0 dgram 660 wifi wifi
-    disabled
     oneshot
 
 # New supplicant service config to support both BCM4334 / WCN3660
-service p2p_supplicant /system/bin/wpa_supplicant \
-    -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf \
-    -I/system/etc/wifi/wpa_supplicant_overlay.conf -N \
-    -ip2p0 -Dnl80211 -c/data/misc/wifi/p2p_supplicant.conf \
-    -I/system/etc/wifi/p2p_supplicant_overlay.conf \
-    -O/data/misc/wifi/sockets -puse_p2p_group_interface=1 \
+service p2p_supplicant /system/bin/wpa_supplicant
+    -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf
+    -I/system/etc/wifi/wpa_supplicant_overlay.conf -N
+    -ip2p0 -Dnl80211 -c/data/misc/wifi/p2p_supplicant.conf
+    -I/system/etc/wifi/p2p_supplicant_overlay.conf
+    -O/data/misc/wifi/sockets -puse_p2p_group_interface=1
     -e/data/misc/wifi/entropy.bin -g@android:wpa_wlan0
 #   we will start as root and wpa_supplicant will switch to user wifi
 #   after setting up the capabilities required for WEXT
-#   user wifi
-#   group wifi inet keystore
+    user wifi
+    group wifi inet keystore
     class main
     socket wpa_wlan0 dgram 660 wifi wifi
-    disabled
     oneshot
 
 service dhcpcd_wlan0 /system/bin/dhcpcd -aABDKL
     class main
-    disabled
     oneshot
 
 service dhcpcd_p2p /system/bin/dhcpcd -aABKL
     class main
-    disabled
     oneshot
 
 service dhcpcd_eth0 /system/bin/dhcpcd -ABDKL
     class main
-    disabled
     oneshot
 
 service iprenew_wlan0 /system/bin/dhcpcd -n
     class main
-    disabled
     oneshot
 
 service iprenew_p2p /system/bin/dhcpcd -n
     class main
-    disabled
     oneshot
 
 service dhcpcd_bnep0 /system/bin/dhcpcd -BKLG
-    disabled
     oneshot
 
 service dhcpcd_bnep1 /system/bin/dhcpcd -BKLG
-    disabled
     oneshot
 
 service dhcpcd_bnep2 /system/bin/dhcpcd -BKLG
-    disabled
     oneshot
 
 service dhcpcd_bnep3 /system/bin/dhcpcd -BKLG
-    disabled
     oneshot
 
 service dhcpcd_bnep4 /system/bin/dhcpcd -BKLG
-    disabled
     oneshot
 
 service dhcpcd_bt-pan /system/bin/dhcpcd -ABKLG
-    disabled
     oneshot
 
 service iprenew_bt-pan /system/bin/dhcpcd -n
-    disabled
     oneshot
 
 on property:crypto.driver.load=1
@@ -703,17 +673,16 @@ on property:crypto.driver.load=0
      exec /system/bin/rmmod qce.ko
 
 service wifi-crda /system/bin/sh /system/etc/init.crda.sh
-   class late_start
+   class main
    user root
-   disabled
    oneshot
 
 on property:sys.boot_completed=1
-    write /sys/block/mmcblk0/queue/scheduler row
-    write /sys/module/rpm_resources/enable_low_power/L2_cache 1
-    write /sys/module/rpm_resources/enable_low_power/pxo 1
-    write /sys/module/rpm_resources/enable_low_power/vdd_dig 1
-    write /sys/module/rpm_resources/enable_low_power/vdd_mem 1
+    write /sys/block/mmcblk0/queue/scheduler cfq
+    write /sys/module/rpm_resources/enable_low_power/L2_cache 0
+    write /sys/module/rpm_resources/enable_low_power/pxo 0
+    write /sys/module/rpm_resources/enable_low_power/vdd_dig 0
+    write /sys/module/rpm_resources/enable_low_power/vdd_mem 0
     write /sys/module/pm_8x60/modes/cpu0/retention/idle_enabled 1
     write /sys/module/pm_8x60/modes/cpu1/retention/idle_enabled 1
     write /sys/module/pm_8x60/modes/cpu0/power_collapse/suspend_enabled 1
@@ -786,26 +755,23 @@ on property:sys.boot_completed=1
     start thermald
 
 service hdmid /system/bin/hdmid
-    class late_start
+    class main
     user system
     group system graphics
     socket hdmid stream 0660 system system
-    disabled
 
 on property:ro.hdmi.enable=true
     start hdmid
 
 service hostapd /system/bin/hostapd -dddd /data/hostapd/hostapd.conf
-    class late_start
+    class main
     user root
     group root
     oneshot
-    disabled
 
 service ds_fmc_appd /system/bin/ds_fmc_appd -p "rmnet0" -D
-    class late_start
+    class main
     group radio wifi inet
-    disabled
     oneshot
 
 on property:persist.data.ds_fmc_app.mode=1
@@ -837,19 +803,16 @@ service secril-daemon /system/bin/sec-ril
 
 # virtual sdcard daemon running as media_rw (1023)
 service sdcard /system/bin/sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated
-    class late_start
+    class main
 
 service fuse_sdcard0 /system/bin/sdcard -u 1023 -g 1023 -d /mnt/media_rw/sdcard0 /storage/sdcard0
-    class late_start
-    disabled
+    class main
 
 service fuse_sdcard1 /system/bin/sdcard -u 1023 -g 1023 -d /mnt/media_rw/sdcard1 /storage/sdcard1
-    class late_start
-    disabled
+    class main
 
 service fuse_usbdisk /system/bin/sdcard -u 1023 -g 1023 /mnt/media_rw/usbdisk /storage/usbdisk
-    class late_start
-    disabled
+    class main
 
 service macloader /system/bin/macloader
     class main
@@ -857,11 +820,11 @@ service macloader /system/bin/macloader
 
 # Disable boot timeout for external modems.
 on property:persist.sys.mdm.timeout_disable=1
-    write /sys/module/mdm_common/parameters/disable_boot_timeout 1
+    write /sys/module/mdm_common/parameters/disable_boot_timeout 0
 
 # Limit to SoC reset (1) and independent SSR (3)
 on property:persist.sys.ssr.restart_level=1
-    write /sys/module/subsystem_restart/parameters/restart_level 1
+    write /sys/module/subsystem_restart/parameters/restart_level 3
 
 on property:persist.sys.ssr.restart_level=3
     write /sys/module/subsystem_restart/parameters/restart_level 3
@@ -877,34 +840,34 @@ on property:service.bootanim.exit=1
 # Powersave
 on property:sys.perf.profile=0
     start mpdecision
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor conservative
-    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor conservative
-    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor ondemand
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor powersave
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor powersave
+    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor powersave
 
 # Balanced
 on property:sys.perf.profile=1
     start mpdecision
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor interactive
-    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor interactive
-    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor ondemand
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor powersave
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor powersave
+    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor powersave
 
 # High performance
 on property:sys.perf.profile=2
     stop mpdecision
     write /sys/devices/system/cpu/cpu0/online 1
     write /sys/devices/system/cpu/cpu1/online 1
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor performance
-    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor performance
-    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor performance
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor powersave
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor powersave
+    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor powersave
 
 on charger
     mount_all fstab.qcom
     class_start charger
     write /sys/devices/system/cpu/cpu1/online 1
-    write /sys/module/rpm_resources/enable_low_power/L2_cache 1
-    write /sys/module/rpm_resources/enable_low_power/pxo 1
-    write /sys/module/rpm_resources/enable_low_power/vdd_dig 1
-    write /sys/module/rpm_resources/enable_low_power/vdd_mem 1
+    write /sys/module/rpm_resources/enable_low_power/L2_cache 0
+    write /sys/module/rpm_resources/enable_low_power/pxo 0
+    write /sys/module/rpm_resources/enable_low_power/vdd_dig 0
+    write /sys/module/rpm_resources/enable_low_power/vdd_mem 0
     write /sys/module/pm_8x60/modes/cpu0/power_collapse/suspend_enabled 1
     write /sys/module/pm_8x60/modes/cpu1/power_collapse/suspend_enabled 1
     write /sys/module/pm_8x60/modes/cpu0/standalone_power_collapse/suspend_enabled 1
@@ -923,7 +886,7 @@ service charger /charger
 
 # start camera server as daemon
 service qcamerasvr /system/bin/mm-qcamera-daemon
-    class late_start
+    class main
     user media
     group system camera inet input graphics
 
@@ -931,16 +894,13 @@ service thermald /system/bin/thermald
    class main
    user root
    group root
-   disabled
 
-service mpdecision /system/bin/mpdecision --avg_comp
+service mpdecision /system/bin/mpdecision --nosleep --avg_comp
     user root
     group root system
-    disabled
 
 service kickstart /system/bin/qcks -i /firmware/image
     oneshot
-    disabled
 
 service qrngd /system/bin/qrngd -f
     class main
@@ -948,7 +908,7 @@ service qrngd /system/bin/qrngd -f
     group root
 
 service efsrestorecon /system/bin/restorecon -R /efs
-    class late_start
+    class main
     user root
     group root
     disabled
@@ -960,7 +920,7 @@ on property:ro.baseband=mdm
     start kickstart
 
 on property:init.svc.bootanim=stopped
-    start efsrestorecon
+    stop efsrestorecon
 
 # boot completed
 on property:dev.bootcomplete=1
@@ -968,9 +928,8 @@ on property:dev.bootcomplete=1
     exec /system/bin/sh /system/etc/init.led.sh
 
 # bugreport is triggered by holding down volume down, volume up and power
-service bugreport /system/bin/dumpstate -d -p -B \
+service bugreport /system/bin/dumpstate -d -p -B
         -o /data/data/com.android.shell/files/bugreports/bugreport
     class main
-    disabled
     oneshot
     keycodes 114 115 116
