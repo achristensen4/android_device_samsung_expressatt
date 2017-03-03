@@ -47,23 +47,20 @@ on boot
 # Services start here
 
 service hciattach /system/bin/sh /system/etc/init.bt.sh
-    class late_start
+    class main
     user bluetooth
     group qcom_oncrpc bluetooth net_bt_admin system
-    disabled
     oneshot
 
 service geomagneticd /system/bin/geomagneticd
     class main
     user compass
     group system input
-    disabled
 
 service orientationd /system/bin/orientationd
     class main
     user compass
     group system input
-    disabled
 
 on property:ro.yas.enable=true
     start orientationd
